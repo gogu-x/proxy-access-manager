@@ -214,16 +214,35 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	}
 	return nil
 }
+
+// SyncStatuses 定期同步到期和停用状态，不触发流量统计接口。
+func (s *Service) SyncStatuses(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	keys, err := s.Store.List(ctx)
+	if err != nil {
+		return err
+	}
+	for _, k := range keys {
+		s.syncOne(ctx, k.ID)
+	}
+	return nil
+}
+
 func (s *Service) Run(ctx context.Context) {
 	s.Reconcile(ctx)
-	ticker := time.NewTicker(time.Minute)
-	defer ticker.Stop()
+	trafficTicker := time.NewTicker(30 * time.Minute)
+	defer trafficTicker.Stop()
+	statusTicker := time.NewTicker(time.Minute)
+	defer statusTicker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-trafficTicker.C:
 			s.Reconcile(ctx)
+		case <-statusTicker.C:
+			s.SyncStatuses(ctx)
 		}
 	}
 }

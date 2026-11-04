@@ -72,8 +72,25 @@ async function reconcile() {
 }
 async function copy(value?: string) {
   if (!value) return
-  try { await navigator.clipboard.writeText(value); ElMessage.success('订阅地址已复制') }
-  catch { ElMessage.error('复制失败，请手动选中地址') }
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable')
+    await navigator.clipboard.writeText(value)
+    ElMessage.success('订阅地址已复制')
+    return
+  } catch {
+    // HTTP 页面或浏览器拒绝 Clipboard API 时，使用兼容方式复制。
+    const field = document.createElement('textarea')
+    field.value = value
+    field.setAttribute('readonly', '')
+    field.style.position = 'fixed'
+    field.style.opacity = '0'
+    document.body.appendChild(field)
+    field.select()
+    const copied = document.execCommand('copy')
+    field.remove()
+    if (copied) ElMessage.success('订阅地址已复制')
+    else ElMessage.error('复制失败，请手动选中地址')
+  }
 }
 watch(() => selected.value?.id, async id => {
   usageHistory.value = []

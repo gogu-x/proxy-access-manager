@@ -133,6 +133,36 @@ func TestSubscription(t *testing.T) {
 	}
 }
 
+func TestSubscriptionsUseDistinctKeys(t *testing.T) {
+	repo := &memoryRepository{items: map[string]model.ProxyKey{}}
+	service := NewService(repo, &fakeGateway{}, Config{Domain: "example.test", XrayPort: 8088, HysteriaPort: 443})
+	first, err := service.Create(t.Context(), "张三", 30, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.Create(t.Context(), "李四", 30, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID == second.ID || first.SubscriptionURL == second.SubscriptionURL {
+		t.Fatal("不同用户的连接凭据或订阅地址相同")
+	}
+	for _, item := range []model.ProxyKey{first, second} {
+		token := strings.TrimPrefix(item.SubscriptionURL, "https://example.test/sub/")
+		content, found, err := service.Subscription(t.Context(), token)
+		if err != nil || !found || strings.Count(content, item.ID) != 2 {
+			t.Fatalf("用户 %s 的订阅凭据错误: found=%v err=%v", item.Name, found, err)
+		}
+		other := first.ID
+		if item.ID == first.ID {
+			other = second.ID
+		}
+		if strings.Contains(content, other) {
+			t.Fatalf("用户 %s 的订阅包含其他用户的凭据", item.Name)
+		}
+	}
+}
+
 func TestUsageHistory(t *testing.T) {
 	today := time.Now().UTC().Format("20060102")
 	repo := &memoryRepository{items: map[string]model.ProxyKey{"user-1": {ID: "user-1", UsageDaily: map[string]int64{today: 1024}}}}
