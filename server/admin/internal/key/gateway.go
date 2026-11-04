@@ -35,12 +35,20 @@ func (c *Client) Present(ctx context.Context, k model.ProxyKey) (bool, error) {
 		return false, err
 	}
 	var result struct {
-		Users []json.RawMessage `json:"users"`
+		Users []struct {
+			Email string `json:"email"`
+		} `json:"users"`
 	}
 	if err = json.Unmarshal(out, &result); err != nil {
 		return false, err
 	}
-	return len(result.Users) > 0, nil
+	want := k.ID + "@keymgr.local"
+	for _, user := range result.Users {
+		if user.Email == want {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 func (c *Client) Add(ctx context.Context, k model.ProxyKey) error {
 	payload := map[string]any{"inbounds": []any{map[string]any{"tag": c.config.XrayTag, "port": c.config.XrayPort, "protocol": "vless", "settings": map[string]any{"clients": []any{map[string]any{"id": k.ID, "email": k.ID + "@keymgr.local", "flow": "xtls-rprx-vision", "level": 0}}, "decryption": "none"}}}}

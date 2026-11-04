@@ -95,6 +95,20 @@ func TestCreateAndRevoke(t *testing.T) {
 	}
 }
 
+func TestSyncStatusesRestoresXrayUser(t *testing.T) {
+	repo := &memoryRepository{items: map[string]model.ProxyKey{
+		"user-id": {ID: "user-id", Name: "张三", Enabled: true, ExpiresAt: time.Now().Add(time.Hour).Unix(), XraySynced: true},
+	}}
+	gateway := &fakeGateway{present: false}
+	service := NewService(repo, gateway, Config{})
+	if err := service.SyncStatuses(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if gateway.added != 1 || !repo.items["user-id"].XraySynced {
+		t.Fatal("Xray 重启后未补回有效用户")
+	}
+}
+
 func TestSubscription(t *testing.T) {
 	repo := &memoryRepository{items: map[string]model.ProxyKey{}}
 	service := NewService(repo, &fakeGateway{}, Config{Domain: "example.test", XrayPort: 8088, HysteriaPort: 443})
