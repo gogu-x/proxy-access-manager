@@ -1,0 +1,27 @@
+# 部署示例：将流量统计密钥替换为独立随机值，并与管理后端配置保持一致。
+listen: :443
+
+tls:
+  cert: /etc/letsencrypt/live/secure3.cn/fullchain.pem
+  key: /etc/letsencrypt/live/secure3.cn/privkey.pem
+  sniGuard: strict
+
+auth:
+  type: http
+  http:
+    url: http://127.0.0.1:10001/auth/hysteria
+
+trafficStats:
+  listen: 127.0.0.1:9999
+  secret: REPLACE_WITH_RANDOM_HYSTERIA_STATS_SECRET
+
+speedTest: true
+disableUDP: false
+udpIdleTimeout: 60s
+
+masquerade:
+  type: proxy
+  proxy:
+    url: https://127.0.0.1/
+    rewriteHost: false
+    insecure: true

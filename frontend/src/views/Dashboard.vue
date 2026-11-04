@@ -1,0 +1,47 @@
+<script setup lang="ts">
+import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
+import { ArrowRight, DataAnalysis, Key, Refresh, TrendCharts, UserFilled, Warning } from '@element-plus/icons-vue'
+import { keyApi, type Key as ProxyKey } from '../api/keys'
+import AppLayout from '../components/AppLayout.vue'
+
+const router = useRouter()
+const items = ref<ProxyKey[]>([])
+const loading = ref(false)
+const now = ref(Date.now() / 1000)
+const active = computed(() => items.value.filter(item => item.active))
+const expired = computed(() => items.value.filter(item => item.expires_at <= now.value))
+const syncIssues = computed(() => items.value.filter(item => item.enabled && !item.xray_synced))
+const used = computed(() => items.value.reduce((sum, item) => sum + item.used_bytes, 0))
+const totalQuota = computed(() => items.value.reduce((sum, item) => sum + item.quota_bytes, 0))
+const recent = computed(() => [...items.value].sort((a, b) => b.created_at - a.created_at).slice(0, 5))
+const topTraffic = computed(() => [...items.value].sort((a, b) => b.used_bytes - a.used_bytes).slice(0, 5))
+const maxTraffic = computed(() => Math.max(1, ...topTraffic.value.map(item => item.used_bytes)))
+const nearExpiry = computed(() => items.value.filter(item => item.active && item.expires_at - now.value < 7 * 86400).length)
+const size = (bytes: number) => bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(2)} GB` : `${(bytes / 1024 ** 2).toFixed(1)} MB`
+const date = (value: number) => new Date(value * 1000).toLocaleDateString('zh-CN')
+const status = (item: ProxyKey) => !item.active ? (item.expires_at <= now.value ? '已过期' : '已停用') : item.xray_synced ? '正常' : '同步异常'
+async function load() {
+  loading.value = true
+  try { items.value = await keyApi.list(); now.value = Date.now() / 1000 }
+  catch (error: any) { ElMessage.error(error?.response?.data?.error || '统计数据加载失败') }
+  finally { loading.value = false }
+}
+onMounted(load)
+</script>
+
+<template>
+  <AppLayout>
+    <div class="dashboard" v-loading="loading">
+      <div class="page-top"><div><div class="eyebrow">OVERVIEW <span></span> 数据总览</div><h1>服务总览</h1><p>统一查看用户状态、流量使用和 Xray 同步情况。</p></div><div class="top-actions"><el-button :icon="Refresh" plain @click="load">刷新数据</el-button><el-button type="primary" :icon="ArrowRight" @click="router.push('/keys')">管理密钥</el-button></div></div>
+      <section class="stats-grid" aria-label="统计指标"><article class="stat-box"><div class="stat-head"><span>用户总数</span><div class="stat-icon blue"><el-icon><UserFilled /></el-icon></div></div><strong>{{ items.length }}</strong><small>已创建的独立凭据</small></article><article class="stat-box"><div class="stat-head"><span>当前可用</span><div class="stat-icon green"><el-icon><Key /></el-icon></div></div><strong>{{ active.length }}</strong><small>通过有效期与额度检查</small></article><article class="stat-box"><div class="stat-head"><span>累计流量</span><div class="stat-icon violet"><el-icon><TrendCharts /></el-icon></div></div><strong class="traffic-number">{{ size(used) }}</strong><small>所有用户已记录流量</small></article><article class="stat-box"><div class="stat-head"><span>同步异常</span><div class="stat-icon amber"><el-icon><Warning /></el-icon></div></div><strong>{{ syncIssues.length }}</strong><small>需检查 Xray API 的用户</small></article></section>
+      <section class="content-grid"><article class="panel"><div class="panel-heading"><div><span class="panel-label">USAGE</span><h3>流量使用排行</h3></div><el-icon class="panel-mark"><DataAnalysis /></el-icon></div><div v-if="topTraffic.length" class="traffic-list"><div v-for="(item, index) in topTraffic" :key="item.id" class="traffic-item"><div class="traffic-name"><span class="rank">{{ String(index + 1).padStart(2, '0') }}</span><span class="truncate">{{ item.name }}</span><strong>{{ size(item.used_bytes) }}</strong></div><div class="bar-track"><span :style="{ width: `${Math.max(item.used_bytes ? 3 : 0, item.used_bytes / maxTraffic * 100)}%` }"></span></div></div></div><div v-else class="empty-state">暂无流量数据</div></article><article class="panel"><div class="panel-heading"><div><span class="panel-label">ACTIVITY</span><h3>最近创建</h3></div><button class="text-link" @click="router.push('/keys')">查看全部 <el-icon><ArrowRight /></el-icon></button></div><div v-if="recent.length" class="recent-list"><div v-for="item in recent" :key="item.id" class="recent-item"><div class="user-avatar">{{ item.name.slice(0, 1) }}</div><div class="recent-info"><strong>{{ item.name }}</strong><span>{{ date(item.created_at) }} 创建</span></div><span class="status-pill" :class="item.active && item.xray_synced ? 'ok' : item.active ? 'warn' : 'off'">{{ status(item) }}</span></div></div><div v-else class="empty-state">暂无用户，前往管理页面创建</div></article></section>
+      <section class="insight-strip"><div><span class="insight-dot"></span><strong>{{ expired.length }}</strong> 个用户已过期 <span class="separator">/</span> <strong>{{ nearExpiry }}</strong> 个用户将在 7 天内到期</div><div>已设置额度合计 {{ size(totalQuota) }} <span class="muted">· 不限额用户未计入</span></div></section>
+    </div>
+  </AppLayout>
+</template>
+
+<style scoped>
+.dashboard{width:100%;min-height:calc(100vh - 70px)}.page-top{display:flex;justify-content:space-between;align-items:flex-end;gap:24px;margin-bottom:28px}.eyebrow,.panel-label{color:#5374b8;font-size:11px;font-weight:800;letter-spacing:.18em}.eyebrow span{display:inline-block;width:22px;height:1px;background:#a5b6d2;vertical-align:middle;margin:0 7px}h1{font-size:32px;letter-spacing:-.04em;margin:10px 0 7px;color:#172a47}.page-top p{margin:0;color:#7b8ba3;font-size:14px}.top-actions{display:flex;gap:10px}.stats-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:18px;margin:0 0 22px}.stat-box,.panel{background:white;border:1px solid #e8edf5;border-radius:18px;box-shadow:0 8px 28px rgba(25,55,96,.035)}.stat-box{padding:25px 26px 23px;position:relative;overflow:hidden;min-height:154px;transition:transform .18s,box-shadow .18s}.stat-box:hover{transform:translateY(-2px);box-shadow:0 14px 32px rgba(30,67,120,.09)}.stat-box:before{content:"";position:absolute;top:0;left:0;right:0;height:3px;background:#4d8eea}.stat-box:nth-child(2):before{background:#32b996}.stat-box:nth-child(3):before{background:#9b7dea}.stat-box:nth-child(4):before{background:#e9aa50}.stat-head{display:flex;align-items:center;justify-content:space-between;color:#73849b;font-size:13px;font-weight:600}.stat-icon{height:38px;width:38px;border-radius:12px;display:grid;place-items:center;font-size:19px}.blue{color:#3474e8;background:#edf3ff}.green{color:#17a483;background:#e8faf4}.violet{color:#8d6ce4;background:#f2edfd}.amber{color:#d99a39;background:#fff5e6}.stat-box strong{display:block;font-size:37px;color:#172b47;letter-spacing:-.05em;margin:16px 0 5px;line-height:1}.stat-box strong.traffic-number{font-size:27px}.stat-box small{font-size:12px;color:#9aa7ba}.content-grid{display:grid;grid-template-columns:1.15fr 1fr;gap:20px}.panel{padding:29px 30px;min-height:350px}.panel-heading{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}.panel-heading h3{font-size:17px;color:#1a2d49;margin:6px 0 0}.panel-mark{font-size:20px;color:#a9b9d4}.text-link{display:flex;gap:5px;align-items:center;border:0;background:none;color:#376bcc;font-weight:600;cursor:pointer}.traffic-list,.recent-list{display:flex;flex-direction:column;gap:17px}.traffic-name{display:flex;align-items:center;gap:12px;font-size:13px;color:#293d5b}.traffic-name strong{margin-left:auto;font-size:12px}.rank{font-size:11px;color:#9dabbd;font-weight:700}.truncate{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.bar-track{height:6px;border-radius:6px;background:#edf2f8;margin:9px 0 0 28px;overflow:hidden}.bar-track span{display:block;height:100%;border-radius:6px;background:linear-gradient(90deg,#579ce6,#59d4bf)}.recent-item{display:flex;align-items:center;gap:12px}.user-avatar{width:37px;height:37px;border-radius:11px;display:grid;place-items:center;background:#eaf2ff;color:#3c6dbe;font-weight:700}.recent-info{display:flex;flex-direction:column;gap:3px}.recent-info strong{font-size:13px}.recent-info span{font-size:11px;color:#9aa8bb}.status-pill{margin-left:auto;border-radius:99px;padding:5px 9px;font-size:11px;font-weight:700}.status-pill.ok{background:#e7f8f1;color:#209c72}.status-pill.warn{background:#fff5e6;color:#bb852a}.status-pill.off{background:#f1f3f6;color:#8d9aaa}.empty-state{height:170px;display:grid;place-items:center;color:#a3afbf;font-size:13px}.insight-strip{display:flex;justify-content:space-between;gap:12px;margin-top:20px;padding:17px 22px;border-radius:14px;background:#edf3fb;color:#61728c;font-size:12px}.insight-strip>div:first-child{display:flex;align-items:center;gap:8px}.insight-strip strong{color:#253f64}.insight-dot{background:#e5ad4f;box-shadow:0 0 0 4px rgba(229,173,79,.15)}.separator{color:#c4cfdb;margin:0 5px}.muted{color:#9caabd}@media(max-width:1000px){.stats-grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:700px){.page-top{align-items:flex-start;flex-direction:column}.top-actions{width:100%}.top-actions .el-button{flex:1}.content-grid{grid-template-columns:1fr}.insight-strip{flex-direction:column}.stats-grid{gap:10px}.stat-box{padding:17px}.stat-box strong{font-size:27px}}@media(max-width:420px){.stats-grid{grid-template-columns:repeat(2,1fr)}.stat-box strong.traffic-number{font-size:21px}}
+</style>
