@@ -31,6 +31,13 @@ func (m *memoryRepository) Create(_ context.Context, item model.ProxyKey) error 
 	m.items[item.ID] = item
 	return nil
 }
+func (m *memoryRepository) Delete(_ context.Context, id string) error {
+	if _, ok := m.items[id]; !ok {
+		return ErrNotFound
+	}
+	delete(m.items, id)
+	return nil
+}
 func (m *memoryRepository) SetEnabled(_ context.Context, id string, enabled bool) error {
 	item := m.items[id]
 	item.Enabled = enabled
@@ -40,6 +47,16 @@ func (m *memoryRepository) SetEnabled(_ context.Context, id string, enabled bool
 func (m *memoryRepository) Renew(_ context.Context, id string, days int) error {
 	item := m.items[id]
 	item.ExpiresAt += int64(days) * 86400
+	m.items[id] = item
+	return nil
+}
+func (m *memoryRepository) SetBandwidth(_ context.Context, id string, up, down int) error {
+	item, ok := m.items[id]
+	if !ok {
+		return ErrNotFound
+	}
+	item.BandwidthUpMbps = up
+	item.BandwidthDownMbps = down
 	m.items[id] = item
 	return nil
 }
@@ -57,6 +74,7 @@ func (m *memoryRepository) SetSync(_ context.Context, id string, synced bool, me
 type fakeGateway struct {
 	present                bool
 	added, removed, kicked int
+	kickErr                error
 }
 
 func (f *fakeGateway) Present(context.Context, model.ProxyKey) (bool, error) { return f.present, nil }
@@ -74,7 +92,10 @@ func (f *fakeGateway) XrayStat(context.Context, model.ProxyKey, string) (*int64,
 	return nil, errors.New("no stats")
 }
 func (f *fakeGateway) HysteriaTraffic(context.Context) (map[string]Traffic, error) { return nil, nil }
-func (f *fakeGateway) Kick(context.Context, model.ProxyKey) error                  { f.kicked++; return nil }
+func (f *fakeGateway) Kick(context.Context, model.ProxyKey) error {
+	f.kicked++
+	return f.kickErr
+}
 func TestCreateAndRevoke(t *testing.T) {
 	repo := &memoryRepository{items: map[string]model.ProxyKey{}}
 	gateway := &fakeGateway{}
@@ -109,6 +130,26 @@ func TestSyncStatusesRestoresXrayUser(t *testing.T) {
 	}
 }
 
+func TestDeleteDisablesBeforeRemovingRecord(t *testing.T) {
+	key := model.ProxyKey{ID: "user-id", Name: "张三", Enabled: true, ExpiresAt: time.Now().Add(time.Hour).Unix()}
+	repo := &memoryRepository{items: map[string]model.ProxyKey{key.ID: key}}
+	gateway := &fakeGateway{present: true, kickErr: errors.New("stats unavailable")}
+	service := NewService(repo, gateway, Config{})
+	if err := service.Delete(t.Context(), key.ID); err == nil {
+		t.Fatal("断开失败时不应删除记录")
+	}
+	if repo.items[key.ID].Enabled || gateway.removed != 1 {
+		t.Fatal("删除失败后用户应保持停用，且 Xray 用户已移除")
+	}
+	gateway.kickErr = nil
+	if err := service.Delete(t.Context(), key.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := repo.items[key.ID]; ok {
+		t.Fatal("代理清理成功后记录仍存在")
+	}
+}
+
 func TestSubscription(t *testing.T) {
 	repo := &memoryRepository{items: map[string]model.ProxyKey{}}
 	service := NewService(repo, &fakeGateway{}, Config{Domain: "example.test", XrayPort: 8088, HysteriaPort: 443})
@@ -133,6 +174,9 @@ func TestSubscription(t *testing.T) {
 	if !strings.Contains(content, `server: "example.test"`) || !strings.Contains(content, `port: 8088`) || !strings.Contains(content, `port: 443`) || strings.Contains(content, "{{") {
 		t.Fatal("订阅节点未正确替换")
 	}
+	if !strings.Contains(content, `up: "20 Mbps"`) || !strings.Contains(content, `down: "100 Mbps"`) {
+		t.Fatal("默认 Hysteria 带宽未写入订阅")
+	}
 	if !strings.Contains(content, `DOMAIN-SUFFIX,google.com,PROXY`) || !strings.Contains(content, `DOMAIN-SUFFIX,openai.com,PROXY`) || !strings.Contains(content, `MATCH,PROXY`) {
 		t.Fatal("原模板规则未保留")
 	}
@@ -144,6 +188,43 @@ func TestSubscription(t *testing.T) {
 	}
 	if _, found, _ := service.Subscription(t.Context(), token); found {
 		t.Fatal("停用用户仍可下载订阅")
+	}
+}
+
+func TestUpdateBandwidthChangesSubscription(t *testing.T) {
+	repo := &memoryRepository{items: map[string]model.ProxyKey{}}
+	service := NewService(repo, &fakeGateway{}, Config{Domain: "example.test", XrayPort: 8088, HysteriaPort: 443})
+	item, err := service.Create(t.Context(), "张三", 30, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.UpdateBandwidth(t.Context(), item.ID, 0, 100); err == nil {
+		t.Fatal("无效带宽被接受")
+	}
+	item, err = service.UpdateBandwidth(t.Context(), item.ID, 35, 80)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.BandwidthUpMbps != 35 || item.BandwidthDownMbps != 80 {
+		t.Fatal("用户带宽未保存")
+	}
+	token := strings.TrimPrefix(item.SubscriptionURL, "https://example.test/sub/")
+	content, found, err := service.Subscription(t.Context(), token)
+	if err != nil || !found || !strings.Contains(content, `up: "35 Mbps"`) || !strings.Contains(content, `down: "80 Mbps"`) {
+		t.Fatal("更新后的带宽未写入订阅")
+	}
+	var document struct {
+		Proxies []map[string]any `yaml:"proxies"`
+	}
+	if err := yaml.Unmarshal([]byte(content), &document); err != nil || len(document.Proxies) != 2 {
+		t.Fatalf("订阅 YAML 无效: %v", err)
+	}
+	hysteria := document.Proxies[1]
+	if hysteria["up"] != "35 Mbps" || hysteria["down"] != "80 Mbps" {
+		t.Fatal("Hysteria 节点未使用平级 up/down 字段")
+	}
+	if _, nested := hysteria["bandwidth"]; nested {
+		t.Fatal("FlClash 节点不应使用嵌套 bandwidth 字段")
 	}
 }
 

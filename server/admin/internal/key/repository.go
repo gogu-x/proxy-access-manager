@@ -17,8 +17,10 @@ type Repository interface {
 	Get(context.Context, string) (model.ProxyKey, error)
 	List(context.Context) ([]model.ProxyKey, error)
 	Create(context.Context, model.ProxyKey) error
+	Delete(context.Context, string) error
 	SetEnabled(context.Context, string, bool) error
 	Renew(context.Context, string, int) error
+	SetBandwidth(context.Context, string, int, int) error
 	RecordUsage(context.Context, model.ProxyKey, *int64, *int64, *int64, *int64) error
 	SetSync(context.Context, string, bool, string) error
 }
@@ -49,6 +51,13 @@ func (r *MongoRepository) Create(ctx context.Context, k model.ProxyKey) error {
 	_, err := r.collection.InsertOne(ctx, k)
 	return err
 }
+func (r *MongoRepository) Delete(ctx context.Context, id string) error {
+	result, err := r.collection.DeleteOne(ctx, bson.M{"_id": id})
+	if err == nil && result.DeletedCount == 0 {
+		return ErrNotFound
+	}
+	return err
+}
 func (r *MongoRepository) SetEnabled(ctx context.Context, id string, enabled bool) error {
 	result, err := r.collection.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{"enabled": enabled}})
 	if err == nil && result.MatchedCount == 0 {
@@ -74,6 +83,13 @@ func (r *MongoRepository) Renew(ctx context.Context, id string, days int) error 
 		return errors.New("续期冲突，请重试")
 	}
 	return nil
+}
+func (r *MongoRepository) SetBandwidth(ctx context.Context, id string, up, down int) error {
+	result, err := r.collection.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{"bandwidth_up_mbps": up, "bandwidth_down_mbps": down}})
+	if err == nil && result.MatchedCount == 0 {
+		return ErrNotFound
+	}
+	return err
 }
 func (r *MongoRepository) SetSync(ctx context.Context, id string, synced bool, message string) error {
 	_, err := r.collection.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{"xray_synced": synced, "sync_error": message}})

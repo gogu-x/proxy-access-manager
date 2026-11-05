@@ -39,8 +39,19 @@ type Service struct {
 func NewService(s Repository, p ProxyGateway, c Config) *Service {
 	return &Service{s, p, c, sync.Mutex{}}
 }
+func effectiveBandwidth(k model.ProxyKey) (int, int) {
+	up, down := k.BandwidthUpMbps, k.BandwidthDownMbps
+	if up <= 0 {
+		up = 20
+	}
+	if down <= 0 {
+		down = 100
+	}
+	return up, down
+}
 func (s *Service) Decorate(k model.ProxyKey) model.ProxyKey {
 	k.Active = k.IsActive()
+	k.BandwidthUpMbps, k.BandwidthDownMbps = effectiveBandwidth(k)
 	if s.Config.Domain != "" {
 		host := s.Config.Domain
 		label := url.QueryEscape(k.Name)
@@ -80,11 +91,14 @@ func (s *Service) Subscription(ctx context.Context, token string) (string, bool,
 
 // SubscriptionYAML 根据用户提供的 Clash 模板替换节点地址与凭据。
 func (s *Service) SubscriptionYAML(k model.ProxyKey) string {
+	up, down := effectiveBandwidth(k)
 	return strings.NewReplacer(
 		"{{DOMAIN}}", strconv.Quote(s.Config.Domain),
 		"{{USER_KEY}}", strconv.Quote(k.ID),
 		"{{XRAY_PORT}}", strconv.Itoa(s.Config.XrayPort),
 		"{{HYSTERIA_PORT}}", strconv.Itoa(s.Config.HysteriaPort),
+		"{{HYSTERIA_UP}}", strconv.Quote(fmt.Sprintf("%d Mbps", up)),
+		"{{HYSTERIA_DOWN}}", strconv.Quote(fmt.Sprintf("%d Mbps", down)),
 	).Replace(clashTemplate)
 }
 func (s *Service) List(ctx context.Context) ([]model.ProxyKey, error) {
@@ -148,12 +162,23 @@ func (s *Service) Create(ctx context.Context, name string, days, quotaGB int) (m
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	k := model.ProxyKey{ID: uuid.NewString(), Name: name, Enabled: true, CreatedAt: time.Now().Unix(), ExpiresAt: time.Now().Unix() + int64(days)*86400, QuotaBytes: int64(quotaGB) * 1024 * 1024 * 1024}
+	k := model.ProxyKey{ID: uuid.NewString(), Name: name, Enabled: true, CreatedAt: time.Now().Unix(), ExpiresAt: time.Now().Unix() + int64(days)*86400, QuotaBytes: int64(quotaGB) * 1024 * 1024 * 1024, BandwidthUpMbps: 20, BandwidthDownMbps: 100}
 	if err := s.Store.Create(ctx, k); err != nil {
 		return k, err
 	}
 	s.syncOne(ctx, k.ID)
 	return s.Get(ctx, k.ID)
+}
+func (s *Service) UpdateBandwidth(ctx context.Context, id string, up, down int) (model.ProxyKey, error) {
+	if up < 1 || up > 10000 || down < 1 || down > 10000 {
+		return model.ProxyKey{}, fmt.Errorf("带宽需为 1 到 10000 Mbps")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.Store.SetBandwidth(ctx, id, up, down); err != nil {
+		return model.ProxyKey{}, err
+	}
+	return s.Get(ctx, id)
 }
 func (s *Service) Change(ctx context.Context, id, action string, days int) (model.ProxyKey, error) {
 	s.mu.Lock()
@@ -181,6 +206,33 @@ func (s *Service) Change(ctx context.Context, id, action string, days int) (mode
 	s.syncOne(ctx, id)
 	return s.Get(ctx, id)
 }
+
+// Delete 先禁用凭据并清理代理中的用户，再删除记录。
+func (s *Service) Delete(ctx context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	k, err := s.Store.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if err := s.Store.SetEnabled(ctx, id, false); err != nil {
+		return err
+	}
+	present, err := s.Proxy.Present(ctx, k)
+	if err != nil {
+		return fmt.Errorf("查询 Xray 用户失败，用户已停用，可重试删除: %w", err)
+	}
+	if present {
+		if err := s.Proxy.Remove(ctx, k); err != nil {
+			return fmt.Errorf("移除 Xray 用户失败，用户已停用，可重试删除: %w", err)
+		}
+	}
+	if err := s.Proxy.Kick(ctx, k); err != nil {
+		return fmt.Errorf("断开 Hysteria 连接失败，用户已停用，可重试删除: %w", err)
+	}
+	return s.Store.Delete(ctx, id)
+}
+
 func (s *Service) syncOne(ctx context.Context, id string) {
 	k, err := s.Store.Get(ctx, id)
 	if err != nil {

@@ -62,7 +62,7 @@ proxies:
     type: "vless"
     udp: true
     uuid: {{USER_KEY}}
-  - down: "200 Mbps"
+  - down: {{HYSTERIA_DOWN}}
     name: "Hysteria2-secure3"
     password: {{USER_KEY}}
     port: {{HYSTERIA_PORT}}
@@ -71,7 +71,7 @@ proxies:
     sni: {{DOMAIN}}
     type: "hysteria2"
     udp: true
-    up: "100 Mbps"
+    up: {{HYSTERIA_UP}}
 proxy-groups:
   - name: "PROXY"
     proxies:

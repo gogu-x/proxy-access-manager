@@ -17,7 +17,40 @@ func (a *AdminService) registerKeyRoutes(r *gin.RouterGroup) {
 	keys.POST("/:id/revoke", a.changeKey)
 	keys.POST("/:id/enable", a.changeKey)
 	keys.POST("/:id/renew", a.changeKey)
+	keys.PUT("/:id/bandwidth", a.updateBandwidth)
+	keys.DELETE("/:id", a.deleteKey)
 	r.POST("/reconcile", requireRole("admin"), a.reconcileKeys)
+}
+func (a *AdminService) updateBandwidth(c *gin.Context) {
+	var req struct {
+		UpMbps   int `json:"up_mbps"`
+		DownMbps int `json:"down_mbps"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "请求无效"})
+		return
+	}
+	item, err := a.keys.UpdateBandwidth(c.Request.Context(), c.Param("id"), req.UpMbps, req.DownMbps)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, key.ErrNotFound) {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"ok": false, "error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "data": item})
+}
+func (a *AdminService) deleteKey(c *gin.Context) {
+	if err := a.keys.Delete(c.Request.Context(), c.Param("id")); err != nil {
+		status := http.StatusServiceUnavailable
+		if errors.Is(err, key.ErrNotFound) {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"ok": false, "error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 func (a *AdminService) keyUsage(c *gin.Context) {
 	granularity := c.DefaultQuery("granularity", "day")
