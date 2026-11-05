@@ -20,11 +20,14 @@ func (a *AdminService) registerKeyRoutes(r *gin.RouterGroup) {
 	r.POST("/reconcile", requireRole("admin"), a.reconcileKeys)
 }
 func (a *AdminService) keyUsage(c *gin.Context) {
-	points, err := a.keys.UsageHistory(c.Request.Context(), c.Param("id"))
+	granularity := c.DefaultQuery("granularity", "day")
+	points, err := a.keys.UsageHistory(c.Request.Context(), c.Param("id"), granularity)
 	if err != nil {
 		status := http.StatusServiceUnavailable
 		if errors.Is(err, key.ErrNotFound) {
 			status = http.StatusNotFound
+		} else if errors.Is(err, key.ErrInvalidGranularity) {
+			status = http.StatusBadRequest
 		}
 		c.JSON(status, gin.H{"error": err.Error()})
 		return

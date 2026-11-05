@@ -178,11 +178,29 @@ func TestSubscriptionsUseDistinctKeys(t *testing.T) {
 }
 
 func TestUsageHistory(t *testing.T) {
-	today := time.Now().UTC().Format("20060102")
-	repo := &memoryRepository{items: map[string]model.ProxyKey{"user-1": {ID: "user-1", UsageDaily: map[string]int64{today: 1024}}}}
+	now := time.Now().UTC()
+	repo := &memoryRepository{items: map[string]model.ProxyKey{"user-1": {
+		ID:            "user-1",
+		UsageDaily:    map[string]int64{now.Format("20060102"): 1024},
+		UsageHourly:   map[string]int64{now.Format("2006010215"): 512},
+		UsageMinutely: map[string]int64{now.Format("200601021504"): 256},
+	}}}
 	service := NewService(repo, &fakeGateway{}, Config{})
-	points, err := service.UsageHistory(t.Context(), "user-1")
-	if err != nil || len(points) != 30 || points[29].Bytes != 1024 {
-		t.Fatalf("流量历史不正确: points=%v err=%v", points, err)
+	for _, tc := range []struct {
+		granularity string
+		count       int
+		bytes       int64
+	}{
+		{"minute", 60, 256},
+		{"hour", 24, 512},
+		{"day", 30, 1024},
+	} {
+		points, err := service.UsageHistory(t.Context(), "user-1", tc.granularity)
+		if err != nil || len(points) != tc.count || points[len(points)-1].Bytes != tc.bytes {
+			t.Fatalf("%s 流量历史不正确: points=%v err=%v", tc.granularity, points, err)
+		}
+	}
+	if _, err := service.UsageHistory(t.Context(), "user-1", "week"); !errors.Is(err, ErrInvalidGranularity) {
+		t.Fatalf("无效粒度未被拒绝: %v", err)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	_ "embed"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"github.com/gogu-x/proxy-access-manager/conf"
 	"github.com/gogu-x/proxy-access-manager/model"
@@ -103,17 +104,41 @@ type UsagePoint struct {
 	Bytes int64  `json:"bytes"`
 }
 
-// UsageHistory 返回最近三十天的每日流量。
-func (s *Service) UsageHistory(ctx context.Context, id string) ([]UsagePoint, error) {
+var ErrInvalidGranularity = errors.New("统计粒度无效")
+
+// UsageHistory 按分钟、小时或天返回固定范围的流量数据。
+func (s *Service) UsageHistory(ctx context.Context, id, granularity string) ([]UsagePoint, error) {
+	var count int
+	var interval time.Duration
+	var keyFormat, displayFormat string
+	switch granularity {
+	case "minute":
+		count, interval, keyFormat, displayFormat = 60, time.Minute, "200601021504", "2006-01-02T15:04:00Z"
+	case "hour":
+		count, interval, keyFormat, displayFormat = 24, time.Hour, "2006010215", "2006-01-02T15:00:00Z"
+	case "day":
+		count, interval, keyFormat, displayFormat = 30, 24*time.Hour, "20060102", "2006-01-02T00:00:00Z"
+	default:
+		return nil, ErrInvalidGranularity
+	}
 	k, err := s.Store.Get(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	points := make([]UsagePoint, 0, 30)
-	today := time.Now().UTC()
-	for offset := 29; offset >= 0; offset-- {
-		day := today.AddDate(0, 0, -offset)
-		points = append(points, UsagePoint{Date: day.Format("2006-01-02"), Bytes: k.UsageDaily[day.Format("20060102")]})
+	points := make([]UsagePoint, 0, count)
+	current := time.Now().UTC().Truncate(interval)
+	for offset := count - 1; offset >= 0; offset-- {
+		at := current.Add(-time.Duration(offset) * interval)
+		var bytes int64
+		switch granularity {
+		case "minute":
+			bytes = k.UsageMinutely[at.Format(keyFormat)]
+		case "hour":
+			bytes = k.UsageHourly[at.Format(keyFormat)]
+		case "day":
+			bytes = k.UsageDaily[at.Format(keyFormat)]
+		}
+		points = append(points, UsagePoint{Date: at.Format(displayFormat), Bytes: bytes})
 	}
 	return points, nil
 }
@@ -231,7 +256,7 @@ func (s *Service) SyncStatuses(ctx context.Context) error {
 
 func (s *Service) Run(ctx context.Context) {
 	s.Reconcile(ctx)
-	trafficTicker := time.NewTicker(30 * time.Minute)
+	trafficTicker := time.NewTicker(time.Minute)
 	defer trafficTicker.Stop()
 	statusTicker := time.NewTicker(time.Minute)
 	defer statusTicker.Stop()

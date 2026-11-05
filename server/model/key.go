@@ -17,6 +17,8 @@ type ProxyKey struct {
 	HystUpLast      int64            `json:"-" bson:"hyst_up_last"`
 	HystDownLast    int64            `json:"-" bson:"hyst_down_last"`
 	UsageDaily      map[string]int64 `json:"-" bson:"usage_daily,omitempty"`
+	UsageHourly     map[string]int64 `json:"-" bson:"usage_hourly,omitempty"`
+	UsageMinutely   map[string]int64 `json:"-" bson:"usage_minutely,omitempty"`
 	Active          bool             `json:"active" bson:"-"`
 	HysteriaLink    string           `json:"hysteria_link,omitempty" bson:"-"`
 	VlessLink       string           `json:"vless_link,omitempty" bson:"-"`

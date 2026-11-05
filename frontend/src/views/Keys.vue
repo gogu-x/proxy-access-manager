@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Calendar, CirclePlus, CopyDocument, Key as KeyIcon, Refresh, Search, User } from '@element-plus/icons-vue'
-import { keyApi, type Key, type UsagePoint } from '../api/keys'
+import { keyApi, type Key, type UsageGranularity, type UsagePoint } from '../api/keys'
 import UsageChart from '../components/UsageChart.vue'
 import AppLayout from '../components/AppLayout.vue'
 
@@ -13,6 +13,8 @@ const syncing = ref(false)
 const dialog = ref(false)
 const selected = ref<Key | null>(null)
 const usageHistory = ref<UsagePoint[]>([])
+const usageGranularity = ref<UsageGranularity>('minute')
+const usageRefresh = ref(0)
 const usageLoading = ref(false)
 const drawerWidth = ref(680)
 const resizing = ref(false)
@@ -92,15 +94,17 @@ async function copy(value?: string) {
     else ElMessage.error('复制失败，请手动选中地址')
   }
 }
-watch(() => selected.value?.id, async id => {
-  usageHistory.value = []
+watch([() => selected.value?.id, usageGranularity, usageRefresh], async ([id, granularity], [previousId, previousGranularity], onCleanup) => {
+  if (id !== previousId || granularity !== previousGranularity) usageHistory.value = []
   if (!id) return
+  let cancelled = false
+  onCleanup(() => { cancelled = true })
   usageLoading.value = true
   try {
-    const points = await keyApi.usage(id)
-    if (selected.value?.id === id) usageHistory.value = points
-  } catch (error) { ElMessage.error(reason(error)) }
-  finally { usageLoading.value = false }
+    const points = await keyApi.usage(id, granularity)
+    if (!cancelled) usageHistory.value = points
+  } catch (error) { if (!cancelled) ElMessage.error(reason(error)) }
+  finally { if (!cancelled) usageLoading.value = false }
 })
 function startResize(event: PointerEvent) {
   if (window.innerWidth <= 760) return
@@ -117,7 +121,14 @@ function stopResize(event: PointerEvent) {
   const target = event.currentTarget as HTMLElement
   if (target.hasPointerCapture(event.pointerId)) target.releasePointerCapture(event.pointerId)
 }
-onMounted(load)
+let usageRefreshTimer: number | undefined
+onMounted(() => {
+  load()
+  usageRefreshTimer = window.setInterval(() => {
+    if (selected.value) usageRefresh.value++
+  }, 60_000)
+})
+onUnmounted(() => window.clearInterval(usageRefreshTimer))
 </script>
 
 <template>
@@ -140,7 +151,7 @@ onMounted(load)
         </el-form>
         <template #footer><el-button size="large" @click="dialog = false">取消</el-button><el-button type="primary" size="large" :loading="creating" @click="create">创建用户</el-button></template>
       </el-dialog>
-      <el-drawer :model-value="!!selected" @update:model-value="(value: boolean) => { if (!value) selected = null }" :title="selected?.name || '用户详情'" :size="`${drawerWidth}px`" class="resizable-detail-drawer"><div class="drawer-resize-handle" role="separator" aria-label="拖动调整详情宽度" aria-orientation="vertical" @pointerdown="startResize" @pointermove="moveResize" @pointerup="stopResize" @pointercancel="stopResize"><span></span></div><template v-if="selected"><div class="drawer-content"><div class="detail-banner"><span class="avatar large">{{ selected.name.slice(0, 1) }}</span><div><strong>{{ selected.name }}</strong><span class="state" :class="stateClass(selected)"><i></i>{{ state(selected) }}</span></div></div><div v-loading="usageLoading"><UsageChart :points="usageHistory" /></div><div class="detail-section"><h3>账户信息</h3><div class="detail-row"><span>到期时间</span><strong>{{ date(selected.expires_at) }}</strong></div><div class="detail-row"><span>已用流量</span><strong>{{ size(selected.used_bytes) }} / {{ selected.quota_bytes ? size(selected.quota_bytes) : '不限额' }}</strong></div><div class="detail-row"><span>Xray 同步</span><strong>{{ selected.xray_synced ? '正常' : selected.sync_error || '等待同步' }}</strong></div></div><div class="detail-section"><h3>订阅地址</h3><p>将此地址交给用户，在客户端添加订阅即可。</p><div class="subscription-box"><el-input :model-value="selected.subscription_url || '请先设置服务域名'" readonly/><el-button type="primary" :icon="CopyDocument" :disabled="!selected.subscription_url" @click="copy(selected.subscription_url)">复制</el-button></div><small>停用、过期或超额后，订阅地址无法再次下载配置。</small></div><div class="detail-section"><h3>连接凭据</h3><div class="key-value">{{ selected.id }}</div><small>订阅配置内包含此 key，请仅分享给对应用户。</small></div><div class="drawer-actions"><el-button @click="action(selected!, 'renew')">续期</el-button><el-button v-if="selected.enabled" type="danger" plain @click="action(selected!, 'revoke')">停用用户</el-button><el-button v-else type="success" plain @click="action(selected!, 'enable')">启用用户</el-button></div></div></template></el-drawer>
+      <el-drawer :model-value="!!selected" @update:model-value="(value: boolean) => { if (!value) selected = null }" :title="selected?.name || '用户详情'" :size="`${drawerWidth}px`" class="resizable-detail-drawer"><div class="drawer-resize-handle" role="separator" aria-label="拖动调整详情宽度" aria-orientation="vertical" @pointerdown="startResize" @pointermove="moveResize" @pointerup="stopResize" @pointercancel="stopResize"><span></span></div><template v-if="selected"><div class="drawer-content"><div class="detail-banner"><span class="avatar large">{{ selected.name.slice(0, 1) }}</span><div><strong>{{ selected.name }}</strong><span class="state" :class="stateClass(selected)"><i></i>{{ state(selected) }}</span></div></div><div v-loading="usageLoading"><UsageChart :points="usageHistory" :granularity="usageGranularity" @change="usageGranularity = $event" /></div><div class="detail-section"><h3>账户信息</h3><div class="detail-row"><span>到期时间</span><strong>{{ date(selected.expires_at) }}</strong></div><div class="detail-row"><span>已用流量</span><strong>{{ size(selected.used_bytes) }} / {{ selected.quota_bytes ? size(selected.quota_bytes) : '不限额' }}</strong></div><div class="detail-row"><span>Xray 同步</span><strong>{{ selected.xray_synced ? '正常' : selected.sync_error || '等待同步' }}</strong></div></div><div class="detail-section"><h3>订阅地址</h3><p>将此地址交给用户，在客户端添加订阅即可。</p><div class="subscription-box"><el-input :model-value="selected.subscription_url || '请先设置服务域名'" readonly/><el-button type="primary" :icon="CopyDocument" :disabled="!selected.subscription_url" @click="copy(selected.subscription_url)">复制</el-button></div><small>停用、过期或超额后，订阅地址无法再次下载配置。</small></div><div class="detail-section"><h3>连接凭据</h3><div class="key-value">{{ selected.id }}</div><small>订阅配置内包含此 key，请仅分享给对应用户。</small></div><div class="drawer-actions"><el-button @click="action(selected!, 'renew')">续期</el-button><el-button v-if="selected.enabled" type="danger" plain @click="action(selected!, 'revoke')">停用用户</el-button><el-button v-else type="success" plain @click="action(selected!, 'enable')">启用用户</el-button></div></div></template></el-drawer>
     </div>
   </AppLayout>
 </template>

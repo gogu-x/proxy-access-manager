@@ -95,11 +95,24 @@ func (r *MongoRepository) RecordUsage(ctx context.Context, k model.ProxyKey, xup
 		}
 		next[i] = *v
 	}
-	cutoff := time.Now().UTC().AddDate(0, 0, -29).Format("20060102")
+	now := time.Now().UTC()
+	dailyCutoff := now.AddDate(0, 0, -29).Format("20060102")
+	hourlyCutoff := now.Add(-23 * time.Hour).Format("2006010215")
+	minutelyCutoff := now.Add(-59 * time.Minute).Format("200601021504")
 	obsolete := bson.M{}
 	for day := range k.UsageDaily {
-		if day < cutoff {
+		if day < dailyCutoff {
 			obsolete["usage_daily."+day] = ""
+		}
+	}
+	for hour := range k.UsageHourly {
+		if hour < hourlyCutoff {
+			obsolete["usage_hourly."+hour] = ""
+		}
+	}
+	for minute := range k.UsageMinutely {
+		if minute < minutelyCutoff {
+			obsolete["usage_minutely."+minute] = ""
 		}
 	}
 	if used == k.UsedBytes && next == old && len(obsolete) == 0 {
@@ -110,7 +123,11 @@ func (r *MongoRepository) RecordUsage(ctx context.Context, k model.ProxyKey, xup
 		update["$unset"] = obsolete
 	}
 	if delta := used - k.UsedBytes; delta > 0 {
-		update["$inc"] = bson.M{"usage_daily." + time.Now().UTC().Format("20060102"): delta}
+		update["$inc"] = bson.M{
+			"usage_daily." + now.Format("20060102"):        delta,
+			"usage_hourly." + now.Format("2006010215"):     delta,
+			"usage_minutely." + now.Format("200601021504"): delta,
+		}
 	}
 	_, err := r.collection.UpdateOne(ctx, bson.M{"_id": k.ID}, update)
 	return err
