@@ -5,3 +5,10 @@ frontend/src/*.js
 frontend/tsconfig.tsbuildinfo
 
 frontend/*.tsbuildinfo
+
+# 本地工具与编辑器配置
+.claude/
+.agent_notes/
+.idea/
+.run/
+.kiro/
