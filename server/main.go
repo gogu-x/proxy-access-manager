@@ -30,7 +30,7 @@ func main() {
 				return errors.New("MongoDB 连接失败")
 			}
 			tree.Spawn(admin.NewAdminService(database))
-			tree.Default().Start()
+			tree.Start()
 			return nil
 		},
 	}
