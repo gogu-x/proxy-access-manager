@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/gin-gonic/gin v1.11.0
-	github.com/gogu-x/tree v0.3.2
+	github.com/gogu-x/tree v0.5.1-0.20261114100509-94146d84594d
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 	github.com/urfave/cli/v3 v3.9.0
@@ -50,5 +50,3 @@ require (
 	golang.org/x/tools v0.48.0 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 )
-
-replace github.com/gogu-x/tree => ../../tree
