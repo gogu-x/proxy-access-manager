@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/gin-gonic/gin v1.11.0
-	github.com/gogu-x/tree v0.5.1-0.20261114100509-94146d84594d
+	github.com/gogu-x/tree v0.6.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 	github.com/urfave/cli/v3 v3.9.0
